@@ -44,6 +44,11 @@ The installer keeps backups. Check `data/task-spaces-refined-update.log` in the 
 Older or manually assembled copies need a one-time install from an extracted release to enroll.
 Pass the release tag and the install options you want to retain, for example
 `python3 install.py --release-tag v0.1.1 --no-instructions --no-hooks`.
+For a customized setup, add `--keep-local-code` on the first managed install. It keeps
+existing local mod code and host wrappers. Later updates merge independent changes
+against the previous release and stop before installing if the changes conflict.
+The original release sources and the local edits stay on your machine.
+
 Use **Setup** for each remote host whose helpers should be upgraded. The desktop update does not restart
 agents or update the Herdr application itself.
 

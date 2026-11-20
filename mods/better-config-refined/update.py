@@ -20,7 +20,7 @@ REPOSITORY = "carlosray/herdr-task-spaces-refined"
 ASSET = "task-spaces-refined.zip"
 INSTALLATION = "task-spaces-refined-install.json"
 STATUS = "task-spaces-refined-update.json"
-OPTIONS = {"--no-wrapper", "--no-instructions", "--no-hooks", "--no-automations"}
+OPTIONS = {"--no-wrapper", "--no-instructions", "--no-hooks", "--no-automations", "--keep-local-code"}
 DOWNLOAD_HOSTS = {"github.com", "api.github.com", "release-assets.githubusercontent.com",
                   "objects.githubusercontent.com"}
 VERSION = re.compile(r"v(\d+)\.(\d+)\.(\d+)")

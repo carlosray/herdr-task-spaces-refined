@@ -57,11 +57,11 @@ class UpdateTests(TestCase):
             root = Path(folder)
             data = root / "data"
             data.mkdir()
-            (data / updater.INSTALLATION).write_text(json.dumps({"flags": ["--no-automations"], "release": "v0.1.8"}))
+            (data / updater.INSTALLATION).write_text(json.dumps({"flags": ["--no-automations", "--keep-local-code"], "release": "v0.1.8"}))
             install.return_value.returncode = 0
             updater.update(root)
             args, kwargs = install.call_args
-            self.assertEqual(args[0][-3:], ["--release-tag", "v0.1.9", "--no-automations"])
+            self.assertEqual(args[0][-4:], ["--release-tag", "v0.1.9", "--no-automations", "--keep-local-code"])
             self.assertEqual(kwargs["env"]["HERDR_APP_HOME"], str(root))
             self.assertEqual(json.loads((data / updater.STATUS).read_text())["state"], "done")
 
