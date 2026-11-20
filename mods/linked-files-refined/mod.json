@@ -1,0 +1,10 @@
+{
+  "place": "none",
+  "title": "Files \u00b7 Code Links",
+  "focusable": true,
+  "cloned_from": {
+    "name": "files",
+    "version": "0.1.13"
+  },
+  "$schema": "./mod.schema.json"
+}

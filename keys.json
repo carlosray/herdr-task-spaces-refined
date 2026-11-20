@@ -1,0 +1,16 @@
+{
+  "layout:task-spaces-refined": {
+    "cmd-n": "mod.open:task-spaces-refined",
+    "cmd-shift-b": "better-sidebar-refined.toggle-panel",
+    "cmd-alt-,": "mod.open:better-config-refined",
+    "cmd-e": "mod.open:session-recent-refined",
+    "cmd-w": "better-tabs-refined.close-tab",
+    "cmd-shift-w": "better-tabs-refined.close-pane",
+    "ctrl-n": "mod.open:task-spaces-refined",
+    "ctrl-shift-b": "better-sidebar-refined.toggle-panel",
+    "ctrl-alt-,": "mod.open:better-config-refined",
+    "ctrl-e": "mod.open:session-recent-refined",
+    "ctrl-w": "better-tabs-refined.close-tab",
+    "ctrl-shift-w": "better-tabs-refined.close-pane"
+  }
+}

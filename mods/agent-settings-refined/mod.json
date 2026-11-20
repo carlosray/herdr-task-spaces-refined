@@ -1,0 +1,10 @@
+{
+  "place": "none",
+  "focusable": true,
+  "title": "Agent settings",
+  "overlay": {
+    "kind": "dialog",
+    "width": 820,
+    "height": 570
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "settings": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "shortcut_copy": {
+          "type": "string",
+          "title": "Copy reference",
+          "default": "cmd-alt-p",
+          "description": "Copy path:line-range for the selected text, without @. Empty disables this shortcut.",
+          "pattern": "^(?:(?:cmd|ctrl|alt|shift)-){0,4}[a-z0-9]$|^$"
+        },
+        "shortcut_insert": {
+          "type": "string",
+          "title": "Insert reference in agent",
+          "default": "cmd-alt-k",
+          "description": "Choose an agent in this Space, insert without submit and focus it. Empty disables this shortcut.",
+          "pattern": "^(?:(?:cmd|ctrl|alt|shift)-){0,4}[a-z0-9]$|^$"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "place": "none",
+  "focusable": true,
+  "title": "Recent sessions",
+  "overlay": {
+    "kind": "dialog",
+    "width": 640,
+    "height": 480
+  }
+}

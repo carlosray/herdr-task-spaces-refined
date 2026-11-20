@@ -1,0 +1,12 @@
+{
+  "place": "none",
+  "focusable": true,
+  "title": "New session",
+  "overlay": {
+    "kind": "popup",
+    "at": "top",
+    "offset": 70,
+    "width": 480,
+    "height": 0.85
+  }
+}

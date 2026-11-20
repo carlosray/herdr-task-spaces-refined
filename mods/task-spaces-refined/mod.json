@@ -1,0 +1,11 @@
+{
+  "place": "none",
+  "title": "Task Spaces",
+  "overlay": {
+    "kind": "popup",
+    "at": "top",
+    "offset": 70,
+    "width": 540,
+    "height": 0.85
+  }
+}
