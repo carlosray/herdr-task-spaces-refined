@@ -5,7 +5,9 @@ import re
 import sys
 
 
-URL = r'https://github\.com/user-attachments/assets/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}'
+ATTACHMENT = r'https://github\.com/user-attachments/assets/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}'
+PINNED_PNG = r'https://raw\.githubusercontent\.com/[\w.-]+/[\w.-]+/[0-9a-f]{40}/(?:[\w-][\w.-]*/)*[\w-][\w.-]*\.png'
+URL = rf'(?:{ATTACHMENT}|{PINNED_PNG})'
 IMAGE = re.compile(r'!\[[^\]\n]*\]\((' + URL + r')\)|<img\b[^>]*\ssrc\s*=\s*["\'](' + URL + r')["\'][^>]*>', re.I)
 
 

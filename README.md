@@ -68,7 +68,7 @@ Add a remote machine through Herdr as usual. The first time a new host becomes r
 
 ## Pull request screenshots and review
 
-The PR author attaches the first before/after pair under **Screenshots → Before** and **Screenshots → After** in the PR description. The required CI check validates that both sections contain separate GitHub image attachments when the PR is ready for review. Use synthetic data at the same window size and theme. For changes with no visible effect, show the workspace and state the expected result.
+The PR author embeds the first before/after pair under **Screenshots → Before** and **Screenshots → After** in the PR description. The required CI check validates separate images when the PR is ready for review. Use GitHub attachments or raw GitHub PNG URLs pinned to a full commit SHA. Use synthetic data at the same window size and theme. For changes with no visible effect, show the workspace and state the expected result.
 
 With `herdr-app` and `hc` on PATH, run the fixture against two unpacked source revisions. Choose the affected screens or use `workspace` for a non-visual change.
 

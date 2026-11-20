@@ -4,7 +4,7 @@
 
 ## Screenshots
 
-<!-- Paste GitHub image attachments in both sections. Capture the same state, viewport, and theme. -->
+<!-- Embed GitHub attachments or pinned PNGs in both sections. Capture the same state, viewport, and theme. -->
 
 ### Before
 

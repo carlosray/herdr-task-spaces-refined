@@ -25,6 +25,14 @@ class PRChecksTests(TestCase):
         self.assertEqual(missing_evidence(body.replace(f'![Workspace]({before})', f'<!-- ![x]({before}) -->')), ['Before'])
         self.assertEqual(missing_evidence(body.replace('### After', '## Unrelated notes')), ['After'])
 
+    def test_author_can_embed_pngs_pinned_to_a_github_commit(self):
+        source = 'https://raw.githubusercontent.com/owner/repo/'
+        commit = 'ab' * 20
+        body = f'## Screenshots\n### Before\n![Before]({source}{commit}/before.png)\n'
+        body += f'### After\n![After]({source}{commit}/after.png)\n'
+        self.assertEqual(missing_evidence(body), [])
+        self.assertEqual(missing_evidence(body.replace(commit, 'main')), ['Before', 'After'])
+
     def test_screens_follow_changed_surfaces(self):
         self.assertEqual(scenarios_for(['README.md', 'tests/test_close.py']), [])
         self.assertEqual(scenarios_for(['mods/linked-changes-refined/main.js']), ['changes'])
