@@ -169,6 +169,23 @@ with tempfile.TemporaryDirectory(prefix='herdr-layout-host-') as folder:
          *['--'+flag for flag in flags]], input=base64.b64encode(raw))
 
 
+def install_keys(keys, backup):
+    additions = json.loads((ROOT/'keys.json').read_text())
+    current = json.loads(keys.read_text()) if keys.exists() else {}
+    previous = json.dumps(current)
+    refined = current.get(f'layout:{LAYOUT}', {})
+    # Remove the old default on upgrade so Ctrl+W reaches the terminal.
+    if refined.get('ctrl-w') == 'better-tabs-refined.close-tab':
+        del refined['ctrl-w']
+    for scope, mapping in additions.items():
+        current[scope] = {**mapping, **current.get(scope, {})}
+    if json.dumps(current) != previous:
+        with tempfile.TemporaryDirectory() as temp:
+            content = Path(temp)/'keys.json'
+            content.write_text(json.dumps(current, indent=2)+'\n')
+            install_file(content, keys, backup)
+
+
 def desktop_install(home, backup, opts, local_code):
     ensure_dependencies(['herdr-app', *([] if opts.no_automations else ['go'])])
     app_home = Path(os.environ.get('HERDR_APP_HOME', home/'.config/herdr-app'))
@@ -191,17 +208,7 @@ def desktop_install(home, backup, opts, local_code):
                             install_file(stage, dest, backup)
                         continue
                 install_file(local_code.get(relative, source), dest, backup, 0o755 if source.suffix == '.py' else 0o644)
-    keys = app_home/'keys.json'
-    additions = json.loads((ROOT/'keys.json').read_text())
-    current = json.loads(keys.read_text()) if keys.exists() else {}
-    previous = json.dumps(current)
-    for scope, mapping in additions.items():
-        current[scope] = {**mapping, **current.get(scope, {})}
-    if json.dumps(current) != previous:
-        with tempfile.TemporaryDirectory() as temp:
-            content = Path(temp)/'keys.json'
-            content.write_text(json.dumps(current, indent=2)+'\n')
-            install_file(content, keys, backup)
+    install_keys(app_home/'keys.json', backup)
     share = home/'.local/share/herdr-task-spaces-refined'
     install_file(ROOT/'install.py', share/'install.py', backup)
     with tempfile.TemporaryDirectory() as temp:

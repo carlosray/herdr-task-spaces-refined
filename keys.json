@@ -10,7 +10,6 @@
     "ctrl-shift-b": "better-sidebar-refined.toggle-panel",
     "ctrl-alt-,": "mod.open:better-config-refined",
     "ctrl-e": "mod.open:session-recent-refined",
-    "ctrl-w": "better-tabs-refined.close-tab",
     "ctrl-shift-w": "better-tabs-refined.close-pane"
   }
 }
