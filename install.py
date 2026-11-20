@@ -85,12 +85,52 @@ def install_instructions(home, backup):
                 install_file(staged, path, backup, 0o600)
 
 
-def host_install(home, backup, opts):
-    ensure_dependencies(['git', 'hc', *([] if opts.no_wrapper else ['bash', 'jq', 'fzf'])])
-    for source, dest in HOST_FILES.items():
-        if opts.no_wrapper and source != 'host/herdr_task.py':
+def host_files(home, opts):
+    return {Path(source): home/dest for source, dest in HOST_FILES.items()
+            if not opts.no_wrapper or source == 'host/herdr_task.py'}
+
+
+def local_code_files(home, app_home, opts):
+    targets = host_files(home, opts)
+    if not opts.host_only:
+        for source in (ROOT/'mods').rglob('*'):
+            if source.is_file() and source.suffix in {'.js', '.py', '.sh'}:
+                relative = source.relative_to(ROOT)
+                # The updater must always understand the current installer flags.
+                if relative != Path('mods/better-config-refined/update.py'):
+                    targets[relative] = app_home/relative
+    return targets
+
+
+def stage_local_code(targets, pristine, staging):
+    """Prepare all local merges before changing any installed file."""
+    selected = {}
+    for relative, target in targets.items():
+        source = ROOT/relative
+        if not target.is_file() or target.read_bytes() == source.read_bytes():
             continue
-        install_file(ROOT/source, home/dest, backup, 0o755)
+        previous = pristine/relative
+        if previous.is_file() and target.read_bytes() == previous.read_bytes():
+            continue
+        if not previous.is_file() or source.read_bytes() == previous.read_bytes():
+            selected[relative] = target
+            continue
+        result = subprocess.run(['git', 'merge-file', '-p', '--', str(target), str(previous), str(source)],
+                                capture_output=True, timeout=15)
+        if result.returncode != 0:
+            raise SystemExit(f'Local code conflicts with the release: {target}. Resolve it before updating.')
+        merged = staging/relative
+        merged.parent.mkdir(parents=True, exist_ok=True)
+        merged.write_bytes(result.stdout)
+        selected[relative] = merged
+    return selected
+
+
+def host_install(home, backup, opts, local_code):
+
+    ensure_dependencies(['git', 'hc', *([] if opts.no_wrapper else ['bash', 'jq', 'fzf'])])
+    for source, dest in host_files(home, opts).items():
+        install_file(local_code.get(source, ROOT/source), dest, backup, 0o755)
     if not opts.no_instructions:
         install_instructions(home, backup)
     if not opts.no_hooks:
@@ -129,7 +169,7 @@ with tempfile.TemporaryDirectory(prefix='herdr-layout-host-') as folder:
          *['--'+flag for flag in flags]], input=base64.b64encode(raw))
 
 
-def desktop_install(home, backup, opts):
+def desktop_install(home, backup, opts, local_code):
     ensure_dependencies(['herdr-app', *([] if opts.no_automations else ['go'])])
     app_home = Path(os.environ.get('HERDR_APP_HOME', home/'.config/herdr-app'))
     layout = ROOT/f'layouts/{LAYOUT}.json'
@@ -137,7 +177,8 @@ def desktop_install(home, backup, opts):
     for tree in ('mods', 'icons'):
         for source in sorted((ROOT/tree).rglob('*')):
             if source.is_file():
-                dest = app_home/source.relative_to(ROOT)
+                relative = source.relative_to(ROOT)
+                dest = app_home/relative
                 # Preserve any local mod settings when refreshing a mod.
                 if dest.name == 'mod.json' and dest.is_file():
                     config = json.loads(source.read_text())
@@ -149,7 +190,7 @@ def desktop_install(home, backup, opts):
                             stage.write_text(json.dumps(config, indent=2)+'\n')
                             install_file(stage, dest, backup)
                         continue
-                install_file(source, dest, backup, 0o755 if source.suffix == '.py' else 0o644)
+                install_file(local_code.get(relative, source), dest, backup, 0o755 if source.suffix == '.py' else 0o644)
     keys = app_home/'keys.json'
     additions = json.loads((ROOT/'keys.json').read_text())
     current = json.loads(keys.read_text()) if keys.exists() else {}
@@ -175,7 +216,7 @@ def desktop_install(home, backup, opts):
 
 def record_installation(home, backup, opts):
     app_home = Path(os.environ.get('HERDR_APP_HOME', home/'.config/herdr-app'))
-    flags = ['--'+name for name in ('no-wrapper', 'no-instructions', 'no-hooks', 'no-automations')
+    flags = ['--'+name for name in ('no-wrapper', 'no-instructions', 'no-hooks', 'no-automations', 'keep-local-code')
              if getattr(opts, name.replace('-', '_'))]
     with tempfile.TemporaryDirectory() as temp:
         state = Path(temp)/'installation.json'
@@ -190,6 +231,8 @@ def main():
     mode.add_argument('--host-only', action='store_true', help='Install host tools without any desktop files')
     for flag in ['no-wrapper', 'no-instructions', 'no-hooks', 'no-automations']:
         parser.add_argument('--'+flag, action='store_true')
+    parser.add_argument('--keep-local-code', action='store_true',
+                        help='Keep existing local code and merge it with later releases')
     parser.add_argument('--release-tag', help='Record the GitHub Release version being installed')
     opts = parser.parse_args()
     if opts.release_tag and not re.fullmatch(r'v\d+\.\d+\.\d+', opts.release_tag):
@@ -206,18 +249,26 @@ def main():
     backup.mkdir(parents=True, mode=0o700)
     if not opts.host_only:
         ensure_dependencies(['herdr-app', *([] if opts.no_automations else ['go'])])
+    app_home = Path(os.environ.get('HERDR_APP_HOME', home/'.config/herdr-app'))
+    pristine = app_home/'data/task-spaces-refined-pristine'
+    targets = local_code_files(home, app_home, opts) if opts.keep_local_code else {}
     with tempfile.TemporaryDirectory(prefix='herdr-layout-build-') as temp:
+        local_code = stage_local_code(targets, pristine, Path(temp)/'merge')
         binary = None
         if not opts.host_only and not opts.no_automations:
             binary = Path(temp)/'herdr-automations'
             run(['go', '-C', str(ROOT/'host/automations'), 'build', '-o', str(binary), '.'])
-        host_install(home, backup, opts)
+        host_install(home, backup, opts, local_code)
         if not opts.host_only:
-            desktop_install(home, backup, opts)
+            desktop_install(home, backup, opts, local_code)
         if binary:
             install_file(binary, home/'.local/bin/herdr-automations', backup, 0o755)
+        for source in targets:
+            install_file(ROOT/source, pristine/source, backup, 0o600)
         if not opts.host_only:
             record_installation(home, backup, opts)
+        if local_code:
+            print(f'Preserved local code in {len(local_code)} installed files.')
     print(f'Installed. Rollback copies: {backup}')
 
 
