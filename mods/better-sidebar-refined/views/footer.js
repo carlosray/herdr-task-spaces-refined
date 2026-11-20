@@ -63,7 +63,7 @@ export class Footer {
       )
       .when(this.hasConfig && !rail, (el) =>
         el.child(
-          this.button("mod-settings", "Mod settings", () => run("mod.open", { name: "better-config-refined" }), t, [
+          this.button("mod-settings", "Layout settings", () => run("mod.open", { name: "better-config-refined" }), t, [
             Icon("sliders"),
           ]),
         ),

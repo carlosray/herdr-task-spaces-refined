@@ -23,12 +23,15 @@ import {
 
 const I = (name) => `mods/better-config-refined/icons/${name}.svg`;
 const POLL_MS = 3000;
+const UPDATE_SECTION = ":layout";
+const UPDATE_FILE = "task-spaces-refined-update.json";
+const INSTALL_FILE = "task-spaces-refined-install.json";
 
 export default class BetterConfig extends View {
   init(_props, cx) {
     this.mods = [];
     this.loaded = false;
-    this.section = null;
+    this.section = UPDATE_SECTION;
     this.inputs = {}; // "mod:key" → { state, focused }
     this.unticked = new Set();
     this.notes = {}; // "mod:key" → why the typed value wasn't saved
@@ -39,13 +42,14 @@ export default class BetterConfig extends View {
     this.openMenu = null; // the dropdown that's open
     this.menuIndex = 0;
     cx.spawn(async (cx) => {
-      await this.load();
+      await Promise.all([this.load(), this.loadUpdateState()]);
       cx.notify();
     });
     // Picks up edits made by hand, or by an update, while the dialog is open.
     cx.timer.every(POLL_MS, (cx) =>
       cx.spawn(async (cx) => {
-        if (await this.load()) cx.notify();
+        const changes = await Promise.all([this.load(), this.loadUpdateState()]);
+        if (changes.some(Boolean)) cx.notify();
       }),
     );
   }
@@ -96,9 +100,62 @@ export default class BetterConfig extends View {
     const before = JSON.stringify(this.mods.map((m) => [m.name, m.raw, m.keptRaw]));
     this.mods = mods;
     this.loaded = true;
-    if (!mods.some((m) => m.name === this.section)) this.section = mods[0]?.name ?? null;
+    if (this.section !== UPDATE_SECTION && !mods.some((m) => m.name === this.section)) this.section = UPDATE_SECTION;
     this.makeInputs();
     return before !== JSON.stringify(mods.map((m) => [m.name, m.raw, m.keptRaw]));
+  }
+
+  async loadUpdateState() {
+    const read = async (file) => {
+      try { return JSON.parse(await readTextFile(`${appHome()}/data/${file}`) ?? "null"); }
+      catch { return null; }
+    };
+    const old = JSON.stringify([this.installation, this.updateState]);
+    const [installation, state] = await Promise.all([read(INSTALL_FILE), read(UPDATE_FILE)]);
+    this.installation = installation;
+    if (state?.state === "working" && Date.now() - state.at > 20 * 60 * 1000) {
+      this.updateState = { state: "error", message: "The update was interrupted. Try again." };
+    } else if (state && (!this.updateState?.at || state.at >= this.updateState.at)) {
+      this.updateState = state;
+    }
+    return old !== JSON.stringify([this.installation, this.updateState]);
+  }
+
+  startUpdate(cx) {
+    if (this.updateStarting || this.updateState?.state === "working") return;
+    this.updateStarting = true;
+    const at = Date.now();
+    cx.notify();
+    cx.spawn(async (cx) => {
+      try {
+        const script = `${appHome()}/mods/better-config-refined/update.py`;
+        const result = await exec("python3", ["-B", script, "--app-home", appHome()], { timeout: 10000 });
+        if (result.code) throw Error(result.stderr.trim() || "Could not start the update.");
+        this.updateState = { state: "working", message: "Checking for updates…", at };
+      } catch (error) {
+        this.updateState = { state: "error", message: String(error.message ?? error), at };
+      } finally {
+        this.updateStarting = false;
+        cx.notify();
+      }
+    });
+  }
+
+  updatePage(t) {
+    const busy = this.updateStarting || this.updateState?.state === "working";
+    return v_flex().gap(12)
+      .child(div().text_size(18).font_semibold().text_color(t.foreground).child("Layout updates"))
+      .child(div().text_size(13).text_color(t.muted).child(this.installation
+        ? `Installed version: ${this.installation.release ?? "source install"}`
+        : "Install Task Spaces Refined with its release installer once to enable updates."))
+      .child(div().text_size(13).text_color(t.muted)
+        .child("Updates include the layout, mods and local Herdr helpers enabled at installation."))
+      .child(h_flex().gap(8)
+        .when(Boolean(this.installation) && !busy, (el) => el.child(this.button(t, "bc-update", "Update layout", cx => this.startUpdate(cx))))
+        .child(this.button(t, "bc-releases", "View releases", cx =>
+          cx.open_url("https://github.com/carlosray/herdr-task-spaces-refined/releases"))))
+      .when(Boolean(this.updateState?.message), (el) => el.child(div().text_size(13)
+        .text_color(this.updateState.state === "error" ? t.ansi1 : t.muted).child(this.updateState.message)));
   }
 
   titleOf(mod) {
@@ -650,7 +707,11 @@ export default class BetterConfig extends View {
       .gap(2)
       .border_r(1)
       .border_color(t.border)
-      .child(div().px(10).pt(6).pb(12).text_size(16).font_semibold().text_color(t.foreground).child("Mod settings"))
+      .child(div().px(10).pt(6).pb(12).text_size(16).font_semibold().text_color(t.foreground).child("Layout settings"))
+      .child(this.button(t, "bc-layout-updates", "Updates", (cx) => {
+        this.section = UPDATE_SECTION;
+        cx.notify();
+      }))
       .child(
         div()
           .id("bc-nav")
@@ -734,7 +795,8 @@ export default class BetterConfig extends View {
                 div()
                   .px(28)
                   .py(22)
-                  .child(this.loaded ? this.page(t, mod) : div().text_size(13).text_color(t.dim).child("Loading…")),
+                  .child(this.section === UPDATE_SECTION ? this.updatePage(t)
+                    : this.loaded ? this.page(t, mod) : div().text_size(13).text_color(t.dim).child("Loading…")),
               ),
           )
           .child(Scrollbar.vertical("bc-body").mode("always").absolute().inset_0()),

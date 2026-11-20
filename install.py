@@ -5,6 +5,7 @@ import base64
 import io
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -172,6 +173,16 @@ def desktop_install(home, backup, opts):
     print(f'Choose {LAYOUT} in Herdr’s layout switcher.')
 
 
+def record_installation(home, backup, opts):
+    app_home = Path(os.environ.get('HERDR_APP_HOME', home/'.config/herdr-app'))
+    flags = ['--'+name for name in ('no-wrapper', 'no-instructions', 'no-hooks', 'no-automations')
+             if getattr(opts, name.replace('-', '_'))]
+    with tempfile.TemporaryDirectory() as temp:
+        state = Path(temp)/'installation.json'
+        state.write_text(json.dumps({'release': opts.release_tag, 'flags': flags})+'\n')
+        install_file(state, app_home/'data/task-spaces-refined-install.json', backup, 0o600)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     mode = parser.add_mutually_exclusive_group()
@@ -179,7 +190,10 @@ def main():
     mode.add_argument('--host-only', action='store_true', help='Install host tools without any desktop files')
     for flag in ['no-wrapper', 'no-instructions', 'no-hooks', 'no-automations']:
         parser.add_argument('--'+flag, action='store_true')
+    parser.add_argument('--release-tag', help='Record the GitHub Release version being installed')
     opts = parser.parse_args()
+    if opts.release_tag and not re.fullmatch(r'v\d+\.\d+\.\d+', opts.release_tag):
+        parser.error('--release-tag must have the format vMAJOR.MINOR.PATCH')
     if opts.host:
         preferences = ROOT/'host-options.json'
         if preferences.exists():
@@ -202,6 +216,8 @@ def main():
             desktop_install(home, backup, opts)
         if binary:
             install_file(binary, home/'.local/bin/herdr-automations', backup, 0o755)
+        if not opts.host_only:
+            record_installation(home, backup, opts)
     print(f'Installed. Rollback copies: {backup}')
 
 

@@ -1,0 +1,176 @@
+name: CI and Release
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  check:
+    # Branch protection uses this job name as its check context.
+    name: Task Spaces Refined CI
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      GOTOOLCHAIN: local
+      GOFLAGS: -mod=readonly
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.10'
+      - uses: actions/setup-node@395ad3262231945c25e8478fd5baf05154b1d79f # v6.1.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 # v6.2.0
+        with:
+          go-version-file: host/automations/go.mod
+          cache: false
+
+      - name: Test Python and Node
+        run: |
+          python3 -B -m unittest discover -s tests -p 'test_*.py'
+          node --test tests/test_*.cjs
+
+      - name: Validate layout and mod references
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          def read_json(path):
+              try:
+                  return json.loads(path.read_text(encoding='utf-8'))
+              except ValueError as exc:
+                  raise SystemExit(f'{path}: {exc}') from exc
+
+          manifests = sorted(Path('mods').glob('*/mod.json'))
+          mods = {'workspace-status'}  # Built in to Herdr Desktop.
+          for path in manifests:
+              mods.add(path.parent.name)
+              manifest = read_json(path)
+              if not path.with_name('main.js').is_file():
+                  raise SystemExit(f'{path}: missing main.js')
+              if '$schema' in manifest:
+                  read_json(path.parent / manifest['$schema'])
+
+          def check_references(value, layout):
+              if isinstance(value, dict):
+                  if 'mod' in value and value['mod'] not in mods:
+                      raise SystemExit(f"{layout}: unknown mod {value['mod']}")
+                  for item in value.values():
+                      check_references(item, layout)
+              elif isinstance(value, list):
+                  for item in value:
+                      check_references(item, layout)
+              elif isinstance(value, str) and value.startswith('mods/'):
+                  if not Path(value).is_file():
+                      raise SystemExit(f'{layout}: missing asset {value}')
+
+          layouts = sorted(Path('layouts').glob('*.json'))
+          if not layouts or not manifests:
+              raise SystemExit('Missing layout or mod manifests')
+          for layout in layouts:
+              check_references(read_json(layout), layout)
+          read_json(Path('keys.json'))
+          PY
+
+      - name: Test Automations
+        working-directory: host/automations
+        run: go test ./...
+
+      - name: Smoke test installer and build Automations from the source archive
+        shell: bash
+        run: |
+          scratch=$(mktemp -d "$RUNNER_TEMP/task-spaces.XXXXXX")
+          trap 'rm -rf "$scratch"' EXIT
+          git archive --format=zip -o "$scratch/task-spaces-refined.zip" "$GITHUB_SHA"
+          unzip -q "$scratch/task-spaces-refined.zip" -d "$scratch/source"
+
+          GOMODCACHE=$(go env GOMODCACHE)
+          GOCACHE=$(go env GOCACHE)
+          export GOMODCACHE GOCACHE
+          export HOME="$scratch/home"
+          export HERDR_APP_HOME="$HOME/.config/herdr-app"
+          export PATH="$scratch/bin:$PATH"
+          mkdir -p "$HOME" "$scratch/bin"
+          # The installer checks for these commands on PATH. Any invocation fails.
+          for command in hc herdr-app fzf; do
+            printf '#!/bin/sh\necho "Unexpected runtime invocation: $0" >&2\nexit 1\n' > "$scratch/bin/$command"
+            chmod +x "$scratch/bin/$command"
+          done
+
+          python3 -B "$scratch/source/install.py"
+          cmp "$scratch/source/layouts/task-spaces-refined.json" "$HERDR_APP_HOME/layouts/task-spaces-refined.json"
+          jq -e -s '.[0] == .[1]' "$scratch/source/keys.json" "$HERDR_APP_HOME/keys.json" >/dev/null
+          test -s "$HOME/.local/share/herdr-task-spaces-refined/host-bundle.zip"
+          test -x "$HOME/.local/bin/herdr-agent"
+          test -x "$HOME/.local/bin/herdr-session-probe"
+          test -x "$HOME/.local/bin/herdr-automations"
+
+  release:
+    name: Publish GitHub Release
+    needs: check
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'carlosray/herdr-task-spaces-refined'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Package the tested commit
+        shell: bash
+        run: |
+          git archive --format=zip -o "$RUNNER_TEMP/task-spaces-refined.zip" "$GITHUB_SHA"
+          cd "$RUNNER_TEMP"
+          sha256sum task-spaces-refined.zip > task-spaces-refined.zip.sha256
+
+      - name: Publish with both assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          # The run number increases for new runs and stays the same on reruns.
+          tag="v0.1.$GITHUB_RUN_NUMBER"
+          zip=task-spaces-refined.zip
+          tag_sha=$(git ls-remote origin "refs/tags/$tag" "refs/tags/$tag^{}" | tail -n 1 | cut -f 1)
+          if [[ -n "$tag_sha" && "$tag_sha" != "$GITHUB_SHA" ]]; then
+            echo "Tag $tag already points to $tag_sha, expected $GITHUB_SHA" >&2
+            exit 1
+          fi
+
+          endpoint="repos/$GH_REPO/releases"
+          release=$(gh api --paginate "$endpoint?per_page=100" --jq ".[] | select(.tag_name == \"$tag\")")
+          if [[ -z "$release" ]]; then
+            release=$(gh api "$endpoint" -f tag_name="$tag" -f target_commitish="$GITHUB_SHA" \
+              -f name="$tag" -f body="Source from $GITHUB_SHA. Unzip and run python3 install.py." -F draft=true)
+          fi
+
+          if jq -e '.draft == false' <<< "$release" >/dev/null; then
+            # A completed rerun leaves the published assets intact.
+            test "$tag_sha" = "$GITHUB_SHA"
+            jq -e --arg zip "$zip" '
+              .prerelease == false and
+              ([.assets[] | select(.state == "uploaded") | .name] | index($zip) != null and index($zip + ".sha256") != null)
+            ' <<< "$release" >/dev/null
+            exit 0
+          fi
+
+          test "$(jq -r '.target_commitish' <<< "$release")" = "$GITHUB_SHA"
+          gh release upload "$tag" "$RUNNER_TEMP/$zip" "$RUNNER_TEMP/$zip.sha256" --clobber
+          id=$(jq -r '.id' <<< "$release")
+          # Let GitHub rank full releases by date and semver, including delayed runs.
+          gh api --method PATCH "$endpoint/$id" -F draft=false -f make_latest=legacy --jq .html_url

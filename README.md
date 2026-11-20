@@ -32,6 +32,21 @@ Put `~/.local/bin` on the PATH of Herdr Core on each execution host. Sign in to 
 
 The default installation includes the wrapper, agent instructions, session metadata hooks, and Automations. Use `--no-wrapper`, `--no-instructions`, `--no-hooks`, and `--no-automations` to omit components. The first three apply to remote setups launched from this desktop as well. To use the console picker, call `herdr-agent codex` (or `claude`, `opencode`, `pi`). To also use plain agent command names, source `~/.config/agent-dev/herdr-shell.sh` from your Bash/Zsh configuration. The layout can launch agents through stock Herdr even when the shell wrapper is omitted.
 
+## Layout updates
+
+After installing with `install.py`, open **Layout settings → Updates → Update layout**.
+The updater downloads the latest stable [GitHub Release](https://github.com/carlosray/herdr-task-spaces-refined/releases),
+checks the ZIP against its published SHA-256 and runs its installer with the original options.
+It refreshes the layout, packaged mods, and the local host components selected at installation.
+Existing mod settings, shortcuts, and sections of agent instructions outside the managed block are retained.
+The installer keeps backups. Check `data/task-spaces-refined-update.log` in the Herdr app home if an update fails.
+
+Older or manually assembled copies need a one-time install from an extracted release to enroll.
+Pass the release tag and the install options you want to retain, for example
+`python3 install.py --release-tag v0.1.1 --no-instructions --no-hooks`.
+Use **Setup** for each remote host whose helpers should be upgraded. The desktop update does not restart
+agents or update the Herdr application itself.
+
 ## Worktree close policy
 
 Open the repository header menu and choose **Worktree close settings**. The policy belongs to that repository on that host. Enable return options, set the target branch, and optionally set a command such as `git branch-idle` if your repository defines it. The default target is `{worktree}-idle`. When the command is empty, Git switches to the target local branch, which must already exist. The policy is off by default.
