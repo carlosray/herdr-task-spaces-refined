@@ -19,7 +19,7 @@ import {
   layout,
 } from "herdr";
 import { PRStatusObserver, prPlaceKey, prAppearance } from "../git/pr-status.js";
-import { REQUESTS, REQUEST_FILTER } from "../git/requests-index.js";
+import { REQUESTS, REQUEST_FILTER, requestURL } from "../git/requests-index.js";
 import { spaceFolder, checkoutKey, readCheckout } from "../git/checkouts.js";
 import { loadSettings, duration } from "../settings.js";
 import { findNode } from "./find-node.js";
@@ -668,11 +668,22 @@ export class Spaces {
     if (!summary) return null;
     const label = `Merge requests · ${summary} · ${space.name}`;
     const color = counts.open || counts.closed ? t.accent : t.ansi5;
-    return IconButton({ id: `space-mrs-${space.id}`, icon: "pull-request", iconSize: 11, label, t, onClick: () => {
-      setShared(REQUEST_FILTER, space.id);
-      run("layout.select", { stack: "panel-body", child: "merge-requests" });
-      run("layout.show", { id: "panel" });
-    } }).size(ROW_END.status).text_color(color).hover(el => el.bg(t.hover).text_color(t.foreground));
+    const shortcut = window().platform === "macos" ? "Cmd" : "Ctrl";
+    return IconButton({
+      id: `space-mrs-${space.id}`, icon: "pull-request", iconSize: 11, label, t,
+      onClick: (cx, event) => {
+        if (this.isPRLinkClick(event)) {
+          const requests = shared(REQUESTS)?.requests ?? [];
+          const urls = new Set(requests.filter(pr => pr.spaces?.some(row => row.id === space.id)).map(requestURL));
+          for (const url of urls) if (url) cx.open_url(url);
+          return;
+        }
+        setShared(REQUEST_FILTER, space.id);
+        run("layout.select", { stack: "panel-body", child: "merge-requests" });
+        run("layout.show", { id: "panel" });
+      },
+    }).size(ROW_END.status).text_color(color).hover(el => el.bg(t.hover).text_color(t.foreground))
+      .tooltip(`${label}\n${shortcut}-click to open all in browser`);
   }
 
   // The branch and PR must describe the same checkout: the space's first

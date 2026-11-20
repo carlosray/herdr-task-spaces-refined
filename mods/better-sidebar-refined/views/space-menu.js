@@ -1,6 +1,6 @@
 import { div } from "gpui-kit";
 import { v_flex } from "gpui-base";
-import { props, theme, closeOverlay, openOverlay, run, exec } from "herdr";
+import { props, theme, closeOverlay, openOverlay, run } from "herdr";
 import { setDirectoryTint, directoryTint, markSessionUnread } from "./ui.js";
 import { DIRECTORY_TINTS } from "./session-hub/row.js";
 import { offerWorktreeClose } from "./close-route.js";
@@ -41,12 +41,9 @@ export class DirectoryMenu {
     const p=this.p,t=theme();
     return menu().child(div().px(10).py(5).text_color(t.dim).child(p.name+' · '+(p.machine==='ivm'?'IVM':p.machine||'Local')))
       .child(item(p,'directory-new-task','New task…',()=>openOverlay({mod:'task-spaces-refined',kind:'popup',width:540,height:0.85,props:{entry:'repository',action:'create',machine:p.machine??null,folder:p.folder}})))
-      .child(item(p,'directory-close-settings','Worktree close settings…',cx=>cx.spawn(async ()=>{
-        const result=await exec('herdr-task',['resolve-directory','--folder',p.folder],{on:p.machine??null});
-        const value=JSON.parse(result.stdout);
-        if(result.code || !value.repo)return;
-        openOverlay({mod:'worktree-close-refined',kind:'popup',width:530,height:340,
-          props:{mode:'settings',machine:p.machine??null,repo:value.repo,display:value.folder}});
+      .child(item(p,'directory-close-settings','Worktree close settings…',()=>openOverlay({
+        mod:'worktree-close-refined',kind:'popup',width:530,height:340,
+        props:{mode:'settings',machine:p.machine??null,folder:p.folder},
       })))
       .child(item(p,'directory-color-reset','No color',()=>setDirectoryTint(p.machine,p.folder,null)))
       .children(DIRECTORY_TINTS.map(([id,label,fill])=>item(p,'directory-color-'+id,label,()=>setDirectoryTint(p.machine,p.folder,id)).border_l(3).border_color(fill)));

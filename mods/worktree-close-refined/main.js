@@ -28,6 +28,32 @@ export default class WorktreeClose extends View {
     this.id = this.machine ? this.p.space?.slice(this.machine.length + 1) : this.p.space;
     this.request = null;
     this.expected = this.space ? signature(this.space) : null;
+    if (this.settings && !this.repo) this.resolveSettings(cx);
+    else this.loadPolicy();
+  }
+
+  resolveSettings(cx) {
+    if (this.loading) return;
+    this.loading = true;
+    this.error = "";
+    cx.notify();
+    cx.spawn(async (cx) => {
+      try {
+        const directory = await this.call(["resolve-directory", "--folder", this.folder], 12000);
+        if (!directory.repo) throw new Error("This working directory is not a Git repository.");
+        this.repo = directory.repo;
+        this.folder = directory.folder;
+        this.loadPolicy();
+      } catch (err) {
+        this.error = String(err.message ?? err);
+      } finally {
+        this.loading = false;
+        cx.notify();
+      }
+    });
+  }
+
+  loadPolicy() {
     this.key = JSON.stringify([this.machine, this.repo]);
     const policy = shared(policies)?.[this.key] ?? {};
     this.enabled = Boolean(policy.enabled);
@@ -40,6 +66,7 @@ export default class WorktreeClose extends View {
   }
 
   save() {
+    if (!this.repo || this.loading) return;
     setShared(policies, {
       ...(shared(policies) ?? {}),
       [this.key]: { enabled: this.enabled, branch: this.branch.value().trim(), command: this.command.value().trim() },
@@ -47,8 +74,8 @@ export default class WorktreeClose extends View {
     closeOverlay(this.p.overlay);
   }
 
-  async call(args) {
-    const reply = await exec("herdr-task", args, { on: this.machine, timeout: 90000 });
+  async call(args, timeout = 90000) {
+    const reply = await exec("herdr-task", args, { on: this.machine, timeout });
     let data;
     try { data = JSON.parse(reply.stdout); }
     catch { throw new Error("The host did not return a Task Spaces result. Check the host setup."); }
@@ -156,8 +183,13 @@ export default class WorktreeClose extends View {
         if (event.key === "escape") { close(); cx.stop_propagation(); }
       })
       .child(dialogHeader(this.settings ? "Worktree close settings" : "Close Space?", close))
-      .child(div().text_color(t.muted).child(this.settings ? this.p.display : this.folder));
+      .child(div().text_color(t.muted).child(this.folder || this.p.display || ""));
     if (this.settings) {
+      if (this.loading) return root.child(div().text_color(t.muted).child("Checking repository…"));
+      if (this.error) return root.child(div().text_color(t.ansi1).child(this.error))
+        .child(h_flex().justify_end().gap(8)
+          .child(button("cancel", "Cancel", close))
+          .child(button("retry-settings", "Retry", (cx) => this.resolveSettings(cx))));
       return root.child(button("enable", this.enabled ? "Return options enabled" : "Return options disabled",
         (cx) => { this.enabled = !this.enabled; cx.notify(); }, { selected: this.enabled }))
         .child(div().child("Pool branch · {worktree} is the directory name"))

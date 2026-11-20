@@ -9,6 +9,7 @@ import { v_flex, h_flex, Scrollbar, InputState, Input, Select, Popup, Checkbox }
 import { appHome, home, exec, readTextFile, writeTextFile, theme, props, closeOverlay, run } from "herdr";
 import {
   fieldsOf,
+  preferRefined,
   getPath,
   problemWith,
   parseInput,
@@ -57,7 +58,7 @@ export default class BetterConfig extends View {
   async load() {
     const listing = await exec("/bin/sh", ["-c", 'cd "$1" && ls -d */ 2>/dev/null', "sh", `${appHome()}/mods`]);
     const names = listing.stdout.split("\n").map((n) => n.replace(/\/$/, "")).filter(Boolean);
-    const mods = [];
+    let mods = [];
     for (const name of names) {
       const path = `${appHome()}/mods/${name}/mod.json`;
       const raw = await readTextFile(path);
@@ -90,6 +91,7 @@ export default class BetterConfig extends View {
       }
       mods.push(mod);
     }
+    mods = preferRefined(mods);
     mods.sort((a, b) => this.titleOf(a).localeCompare(this.titleOf(b)));
     const before = JSON.stringify(this.mods.map((m) => [m.name, m.raw, m.keptRaw]));
     this.mods = mods;

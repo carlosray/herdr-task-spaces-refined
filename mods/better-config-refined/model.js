@@ -224,3 +224,12 @@ export function editManifest(raw, field, value) {
   if (!Object.keys(manifest.settings).length) delete manifest.settings;
   return `${JSON.stringify(manifest, null, 2)}\n`;
 }
+
+// The active Refined family can coexist with the original mods on disk.
+export function preferRefined(mods) {
+  const byName = new Map(mods.map(mod => [mod.name, mod]));
+  return mods.filter(mod => {
+    const refined = byName.get(mod.name + "-refined");
+    return !refined || !mod.manifest?.title || refined.manifest?.title !== mod.manifest.title;
+  });
+}

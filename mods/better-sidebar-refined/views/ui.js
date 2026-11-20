@@ -73,9 +73,9 @@ export function IconButton({ id, icon, label, onClick, iconSize = 15, muted = fa
     .when(Boolean(onClick), (el) =>
       el.on_mouse_down("left",(_e,cx)=>cx.stop_propagation())
         .on_mouse_up("left",(_e,cx)=>cx.stop_propagation())
-        .on_click((_e, cx) => {
+        .on_click((event, cx) => {
           cx.stop_propagation();
-          onClick(cx);
+          onClick(cx, event);
         }),
     )
     .child(Icon(icon, iconSize));
