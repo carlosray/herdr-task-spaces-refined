@@ -1,0 +1,66 @@
+name: Herdr UI previews
+
+on:
+  pull_request:
+    branches: [main]
+    types: [labeled]
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    name: Render Herdr before and after
+    if: github.event.label.name == 'ui-preview'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Install Linux display and graphics libraries
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -qy --no-install-recommends \
+            xvfb xauth fonts-dejavu-core libfontconfig1 libasound2t64 mesa-vulkan-drivers libvulkan1 \
+            libxkbcommon-x11-0 libx11-xcb1 libxcb-shape0 libxcb-xfixes0 libxcb-xinput0 libxcb-randr0 \
+            libxcursor1 libxi6 libxrandr2 libxinerama1 libwayland-client0 libdbus-1-3
+
+      - name: Install pinned Herdr App and Core
+        run: |
+          bash .github/ci/preview_runtime.sh "$RUNNER_TEMP/herdr-bin"
+          echo "$RUNNER_TEMP/herdr-bin" >> "$GITHUB_PATH"
+
+      - name: Capture affected screens
+        env:
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          test "$(git rev-parse HEAD^2)" = "$PR_HEAD"
+          base=$(git rev-parse HEAD^1)
+          scratch=$(mktemp -d "$RUNNER_TEMP/herdr-sources.XXXXXX")
+          mkdir "$scratch/base" "$scratch/merge"
+          git archive "$base" | tar -x -C "$scratch/base"
+          git archive HEAD | tar -x -C "$scratch/merge"
+          screens=$(python3 -B .github/ci/preview_scenarios.py "$base" HEAD)
+          read -ra args <<< "${screens:-workspace}"
+          xvfb-run -a -s "-screen 0 1440x960x24" python3 -B .github/ci/preview_capture.py \
+            "$scratch/base" "$scratch/merge" "$RUNNER_TEMP/previews" "${args[@]}"
+          printf '{"base":"%s","head":"%s"}\n' "$base" "$PR_HEAD" > "$RUNNER_TEMP/previews/revision.json"
+          printf '### Herdr screens\n\n%s\n' "${args[*]}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload screenshot pairs
+        id: screenshots
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: herdr-ui-previews-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/previews/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Link screenshots in the run summary
+        env:
+          ARTIFACT_URL: ${{ steps.screenshots.outputs.artifact-url }}
+        run: printf '\n[Download before/after PNGs](%s)\n' "$ARTIFACT_URL" >> "$GITHUB_STEP_SUMMARY"

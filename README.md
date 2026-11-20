@@ -66,6 +66,22 @@ The installer adds a managed reference in `~/.codex/AGENTS.md` and `~/.claude/CL
 
 Add a remote machine through Herdr as usual. The first time a new host becomes ready, Herdr offers to install the host tools. For an existing host, click **Setup** in its header. The same operation is available from the installer as `python3 install.py --host NAME`. It sends only the host tools and public instructions over `hc exec`. Host credentials and configuration stay on that host. Python, Git and Herdr Core must already be available there.
 
+## Pull request screenshots and review
+
+The PR author attaches the first before/after pair under **Screenshots → Before** and **Screenshots → After** in the PR description. The required CI check validates that both sections contain separate GitHub image attachments when the PR is ready for review. Use synthetic data at the same window size and theme. For changes with no visible effect, show the workspace and state the expected result.
+
+With `herdr-app` and `hc` on PATH, run the fixture against two unpacked source revisions. Choose the affected screens or use `workspace` for a non-visual change.
+
+```sh
+python3 -B .github/ci/preview_capture.py /path/to/before /path/to/after /tmp/herdr-previews workspace changes
+```
+
+On headless Linux, run that command under `xvfb-run -a -s "-screen 0 1440x960x24"`. The `Herdr UI previews` workflow contains the display dependencies and verifies the pinned App and Core downloads. Full scenario names and their path mappings are in `.github/ci/preview_scenarios.py`.
+
+Add the `ui-preview` label in the PR to request a fresh Linux run. It captures the base and the proposed merge for the affected screens, uploads both sets of PNGs, and posts the artifact link in the PR. After updating the PR, remove and re-add the label to compare the new revision.
+
+Token Factory uses the Actions secret `NEBIUS_API_KEY` and the Actions variable `NEBIUS_BASE_URL`. Set `NEBIUS_MODEL` to `moonshotai/Kimi-K3.1-Pro` for code review and `NEBIUS_VISUAL_MODEL` to `deepseek-ai/DeepSeek-V4.1-Flash-1017` for the on-demand image comparison. The visual report flags visible layout issues and links the raw captures. The fixture run uses GitHub's PR sandbox with read-only repository access. The review jobs read the diff and screenshot data from the base branch workflow.
+
 ## License
 
 See [LICENSE](LICENSE), [NOTICE](NOTICE), and the notices supplied with the vendored mods and icon assets. The Automations backend retains its upstream license.
