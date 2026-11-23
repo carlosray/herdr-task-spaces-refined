@@ -1,7 +1,7 @@
 import { View, div } from "gpui-kit";
 import { InputState, h_flex, v_flex } from "gpui-base";
-import { closeOverlay, exec, home, panes, props, run, setShared, shared, spaces, theme } from "herdr";
-import { button, dialogHeader, dialogInput, trackInputFocus } from "./ui.js";
+import { closeOverlay, exec, home, notify, openOverlay, panes, props, run, setShared, shared, spaces, theme } from "herdr";
+import { button, dialogHeader, dialogInput, loadingSpinner, trackInputFocus } from "./ui.js";
 
 const policies = "task-spaces.close-policies";
 const signature = (space) => {
@@ -15,19 +15,24 @@ export default class WorktreeClose extends View {
     this.p = props() ?? {};
     this.settings = this.p.mode === "settings";
     this.setup = this.p.mode === "host";
+    this.progress = this.p.mode === "progress";
     this.space = spaces().find((row) => row.id === this.p.space);
     this.machine = this.p.machine ?? this.space?.machine ?? null;
-    this.handle = cx.focus_handle();
-    this.handle.focus();
-    this.choice = "keep";
+    this.choice = this.progress ? this.p.choice : "keep";
     this.busy = false;
     this.closed = false;
     this.error = "";
     this.folder = this.p.folder ?? "";
     this.repo = this.p.repo;
     this.id = this.machine ? this.p.space?.slice(this.machine.length + 1) : this.p.space;
-    this.request = null;
-    this.expected = this.space ? signature(this.space) : null;
+    this.request = this.p.request ?? null;
+    this.expected = this.p.expected ?? (this.space ? signature(this.space) : null);
+    if (this.progress) {
+      this.continueClose(cx);
+      return;
+    }
+    this.handle = cx.focus_handle();
+    this.handle.focus();
     if (this.settings && !this.repo) this.resolveSettings(cx);
     else this.loadPolicy();
   }
@@ -98,26 +103,40 @@ export default class WorktreeClose extends View {
       closeOverlay(this.p.overlay);
       return run("space.close", { id: this.p.space, confirmed: true });
     }
+    const request = globalThis.crypto?.randomUUID?.() ?? `close-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const { width, height } = window.viewport_size();
+    const cardWidth = Math.min(390, Math.max(100, width - 24));
+    openOverlay({ mod: "worktree-close-refined", kind: "window", frame: "none", width: cardWidth,
+      at: { x: Math.max(12, width - cardWidth - 12), y: Math.max(12, height - 178) },
+      props: { mode: "progress", space: this.p.space, machine: this.machine, folder: this.folder,
+        request, expected: this.expected, choice: this.choice, branch: this.branch.value().trim(),
+        command: this.command.value().trim() } });
+    closeOverlay(this.p.overlay);
+  }
+
+  continueClose(cx) {
+    if (this.busy) return;
     this.busy = true;
     this.error = "";
-    const choice = this.choice;
+    this.detail = this.closed ? "Finishing the Git operation…" : "Checking worktree and sessions…";
     cx.notify();
     cx.spawn(async (cx) => {
       try {
-        const request = this.request ?? globalThis.crypto?.randomUUID?.() ??
-          `close-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-        await this.call(["prepare-close-worktree", "--space", this.id, "--folder", this.folder,
-          "--request-id", request, "--action", choice, "--branch=" + this.branch.value().trim(),
-          "--command=" + this.command.value().trim()]);
-        this.request = request;
-        const current = this.target();
-        if (!current || signature(current) !== this.expected) {
-          await this.call(["cancel-close-worktree", "--space", this.id, "--request-id", request]);
-          this.request = null;
-          throw new Error("The tabs changed. Reopen Close Space to review the current tabs.");
+        if (!this.closed) {
+          await this.call(["prepare-close-worktree", "--space", this.id, "--folder", this.folder,
+            "--request-id", this.request, "--action", this.choice, "--branch=" + this.p.branch,
+            "--command=" + this.p.command]);
+          const current = this.target();
+          if (!current || signature(current) !== this.expected) {
+            await this.call(["cancel-close-worktree", "--space", this.id, "--request-id", this.request]);
+            this.request = null;
+            throw new Error("The tabs changed. Reopen Close Space to review the current tabs.");
+          }
+          run("space.close", { id: this.p.space, confirmed: true });
+          this.closed = true;
         }
-        run("space.close", { id: this.p.space, confirmed: true });
-        this.closed = true;
+        this.detail = "Finishing the Git operation…";
+        cx.notify();
         await this.finish(cx);
       } catch (err) {
         this.error = String(err.message ?? err);
@@ -130,7 +149,12 @@ export default class WorktreeClose extends View {
   async finish(cx, attempts = 18) {
     try {
       const result = await this.call(["finish-close-worktree", "--space", this.id, "--request-id", this.request]);
-      if (!result.waiting) return closeOverlay(this.p.overlay);
+      if (!result.waiting) {
+        const name = this.folder.split("/").at(-1);
+        notify({ title: this.choice === "return" ? "Worktree returned to pool" : "Worktree removed",
+          body: result.branch ? `${name} · ${result.branch}` : name, level: "success" });
+        return closeOverlay(this.p.overlay);
+      }
       if (attempts) {
         cx.timer.after(350, (cx) => cx.spawn(async (cx) => this.finish(cx, attempts - 1)));
         return;
@@ -150,13 +174,29 @@ export default class WorktreeClose extends View {
       try {
         await this.call(["cancel-close-worktree", "--space", this.id, "--request-id", this.request]);
         closeOverlay(this.p.overlay);
-      } catch (err) { this.error = String(err.message ?? err); }
+      } catch (err) {
+        if (String(err.message ?? err) === "No matching pending worktree action") closeOverlay(this.p.overlay);
+        else this.error = String(err.message ?? err);
+      }
       finally { this.busy = false; cx.notify(); }
     });
   }
 
   render() {
     const t = theme();
+    if (this.progress) {
+      const title = this.choice === "return" ? "Returning worktree to pool" : "Removing worktree";
+      return v_flex().w_full().p(12).gap(8).rounded(8).border_1().border_color(t.border)
+        .bg(t.popover).text_size(13).text_color(t.foreground)
+        .child(h_flex().items_center().gap(8).when(this.busy, e => e.child(loadingSpinner(t)))
+          .child(div().font_medium().child(this.error ? "Worktree action needs attention" : title)))
+        .child(div().text_color(t.muted).truncate().tooltip(this.folder).child(this.folder.split("/").at(-1)))
+        .child(div().text_color(this.error ? t.ansi1 : t.muted).whitespace_normal().child(this.error || this.detail))
+        .when(!this.busy, e => e.child(h_flex().justify_end().gap(8)
+          .child(button("cancel-action", this.request ? "Cancel action" : "Dismiss",
+            cx => this.request ? this.cancelPending(cx) : closeOverlay(this.p.overlay)))
+          .when(Boolean(this.request), inner => inner.child(button("retry", "Retry", cx => this.continueClose(cx), { solid: true })))));
+    }
     const close = () => { if (!this.busy && !this.request) closeOverlay(this.p.overlay); };
     if (this.setup) {
       const installer = home() + "/.local/share/herdr-task-spaces-refined/install.py";
@@ -206,24 +246,14 @@ export default class WorktreeClose extends View {
       return: this.command.value() ? `Run ${this.command.value()} and verify branch ${title}.` : `Switch to ${title}.`,
       delete: "Remove the linked checkout. Its Git branch will be kept.",
     };
-    if (!this.closed) root.child(h_flex().gap(5).children(choiceLabels.map(([key, label]) =>
+    root.child(h_flex().gap(5).children(choiceLabels.map(([key, label]) =>
       button("pick-" + key, label, (cx) => { this.choice = key; cx.notify(); }, { selected: this.choice === key, disabled: this.busy }))))
       .child(div().text_color(t.muted).child(detail[this.choice]));
     if (this.error) root.child(div().text_color(t.ansi1).child(this.error));
     const footer = h_flex().justify_end().gap(8);
-    if (this.closed) {
-      footer.child(button("cancel-action", "Cancel worktree action", (cx) => this.cancelPending(cx), { disabled: this.busy }));
-      footer.child(button("retry", this.busy ? "Finishing…" : "Retry", (cx) => {
-        this.busy = true;
-        this.error = "";
-        cx.notify();
-        cx.spawn(async (cx) => this.finish(cx));
-      }, { solid: true, disabled: this.busy }));
-    } else {
-      footer.child(button("cancel", "Cancel", close, { disabled: this.busy }));
-      footer.child(button("confirm", this.choice === "delete" ? "Close and delete" : this.choice === "return" ? "Close and return" : "Close Space",
-        (cx) => this.confirm(cx), { solid: true, disabled: this.busy }));
-    }
+    footer.child(button("cancel", "Cancel", close, { disabled: this.busy }));
+    footer.child(button("confirm", this.choice === "delete" ? "Close and delete" : this.choice === "return" ? "Close and return" : "Close Space",
+      (cx) => this.confirm(cx), { solid: true, disabled: this.busy }));
     return root.child(footer);
   }
 }

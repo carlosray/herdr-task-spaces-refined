@@ -15,6 +15,8 @@ SCREENS = {
     'recent': ('mods/session-hub-refined/', 'mods/session-recent-refined/', 'host/session-hub/'),
     'settings': ('mods/better-config-refined/', 'mods/agent-settings-refined/', 'install.py'),
     'worktree-settings': ('mods/worktree-close-refined/', 'host/herdr_task.py'),
+    'worktree-resume': ('mods/task-spaces-refined/', 'host/herdr_task.py'),
+    'worktree-return': ('mods/worktree-close-refined/', 'host/herdr_task.py'),
 }
 
 
