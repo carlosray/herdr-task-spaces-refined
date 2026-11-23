@@ -16,6 +16,12 @@ const claimFor=(state,id)=>Object.values(state?.checkouts??{}).find(row=>row.spa
 const taskFor=(state,id)=>state?.tasks?.[id]??state?.tasks?.[claimFor(state,id)?.task]??
   Object.values(state?.tasks??{}).find(task=>task.main_space?.space===id);
 const ready=(machine,list=machines())=>list.some(m=>(m.name??null)===(machine??null)&&m.layout==='ready');
+const recoverableWorktree=(row,task)=>{
+  const owner=row?.owner,phase=owner?.launch?.phase;
+  return Boolean(task&&owner?.task===task.id&&!owner.close_action&&!owner.detach_to&&
+    (['creating-checkout','checkout-created'].includes(phase)||
+     ((owner.creation||owner.start_point_commit)&&['pending','unknown','not-found'].includes(phase))));
+};
 const button=(id,text,fn,disabled=false,primary=false)=>control(id,text,fn,{disabled,solid:primary,height:HEIGHT.header});
 const listIds={destination:'wizard-directories',checkout:'wizard-checkouts',add:'wizard-available-worktrees'};
 const branchIcon='mods/better-sidebar-refined/icons/branch.svg';
@@ -465,6 +471,7 @@ export default class TaskSpaces extends View {
     });
   }
   unavailableWorktree(row,state,task) {
+    if(recoverableWorktree(row,task))return 'Finish the saved worktree setup';
     if(row.missing)return 'Checkout is missing';
     if(row.owner?.task===task?.id)return 'Attached to this task';
     if(row.owner)return `Assigned to ${state.tasks?.[row.owner.task]?.name??'another task'}`;
@@ -475,6 +482,10 @@ export default class TaskSpaces extends View {
     const task=this.wizardTask(),path=this.path.value().trim(),branch=this.branch.value().trim();
     if(this.step!=='new-worktree'||this.loading||!task?.repo||!path.startsWith('/')||!branch||!ready(this.machine))return;
     this.mutate(['new-worktree','--task',task.id,'--folder',path,'--branch',branch],cx,result=>this.focusResult(result.space));
+  }
+  resumeWorktree(row,cx,done) {
+    if(this.loading||!recoverableWorktree(row,this.action==='manage'?this.task():this.wizardTask())||!ready(this.machine))return;
+    this.mutate(['resume-worktree','--space',row.owner.space],cx,done);
   }
   back(cx) {
     if(this.busy||this.loading||this.awaitingSpace||this.creationIntent||this.launcherOpening)return;
@@ -519,10 +530,15 @@ export default class TaskSpaces extends View {
       if(this.wizardTask()?.repo)rows.push({id:'wizard-add-worktree',label:'Add a worktree…',disabled:blocked,open:cx=>this.loadAssignable(cx)});
       return rows;
     }
+    const task=this.wizardTask();
     return [...this.assignable.map(row=>({id:'wizard-attach-'+row.folder,label:'Attach '+basename(row.folder),
       detail:branchLabel(row.branch)||shortPath(row.folder),tooltip:row.folder,icon:branchIcon,disabled:blocked,open:cx=>this.assign(row,cx)})),
-      ...this.unavailable.map(row=>({id:'wizard-attach-'+row.folder,label:basename(row.folder),
-        detail:this.unavailableWorktree(row,this.state(),this.wizardTask()),tooltip:[row.folder,row.branch].filter(Boolean).join('\n'),icon:branchIcon,disabled:true})),
+      ...this.unavailable.map(row=>{
+        const resume=recoverableWorktree(row,task);
+        return {id:'wizard-attach-'+row.folder,label:(resume?'Resume setup for ':'')+basename(row.folder),
+          detail:this.unavailableWorktree(row,this.state(),task),tooltip:[row.folder,row.branch].filter(Boolean).join('\n'),
+          icon:branchIcon,disabled:blocked||!resume,open:cx=>this.resumeWorktree(row,cx,result=>this.focusResult(result.space))};
+      }),
       {id:'wizard-new-worktree',label:'Create a new worktree…',disabled:blocked||Boolean(this.error&&!this.assignable.length),
         open:cx=>this.beginNewWorktree(cx)}];
   }
@@ -657,7 +673,8 @@ export default class TaskSpaces extends View {
       if(this.loading)root.child(this.status('Checking for available worktrees…'));
       else if(this.busy)root.child(this.status('Attaching worktree…'));
       else if(this.error)root.child(button('wizard-retry-inventory','Retry worktree check',cx=>this.loadAssignable(cx),!ready(this.machine,allMachines)));
-      else if(this.assignable.length)root.child(div().text_size(TYPE.meta).text_color(t.muted).child('Attach an existing worktree'));
+      else if(this.assignable.length||this.unavailable.some(row=>recoverableWorktree(row,this.wizardTask())))
+        root.child(div().text_size(TYPE.meta).text_color(t.muted).child('Attach a worktree or resume setup'));
       else if(!this.assignable.length)root.child(div().text_color(t.muted).child(this.unavailable.length?'All linked worktrees are in use or unavailable.':'No linked worktrees in this repository.'));
     }
     if(this.navigation[this.step]) {
@@ -699,7 +716,8 @@ export default class TaskSpaces extends View {
     else if(!available.length)list.child(div().py(SPACE.row).text_color(t.muted).child('No linked worktrees in this repository.'));
     else for(const row of available) {
       const isSelected=row.folder===r?.folder;
-      const detail=row.owner?`Assigned · ${taskName(row.owner.task)}`:row.spaces.length?'Existing Space · explicit adoption required':'Available';
+      const detail=recoverableWorktree(row,task)?'Setup unfinished':
+        row.owner?`Assigned · ${taskName(row.owner.task)}`:row.spaces.length?'Existing Space · explicit adoption required':'Available';
       const element=v_flex().id('checkout-'+row.folder).h(HEIGHT.rowTwo).flex_none().px(SPACE.row)
         .justify_center().rounded(RADIUS.control).role('list_box_option').aria_selected(isSelected)
         .when(!disabled,e=>e.cursor_pointer().on_click((_event,cx)=>{this.selected=row;cx.notify();}))
@@ -712,7 +730,9 @@ export default class TaskSpaces extends View {
     if(!this.showNew)root.child(list);
     if(this.error&&!this.showNew)root.child(this.errorMessage());
     if(task) {
-      if(!this.showNew)root.child(button('task-attach',moving?`Move from ${taskName(r.owner.task)} to this task`:r?.spaces.length?'Attach existing Space':'Attach worktree',cx=>this.attach(cx),disabled||!canAttach,true));
+      if(!this.showNew)root.child(recoverableWorktree(r,task)
+        ?button('task-attach','Resume worktree setup',cx=>this.resumeWorktree(r,cx,()=>this.load(cx)),disabled,true)
+        :button('task-attach',moving?`Move from ${taskName(r.owner.task)} to this task`:r?.spaces.length?'Attach existing Space':'Attach worktree',cx=>this.attach(cx),disabled||!canAttach,true));
       const child=Object.values(state.checkouts).find(x=>qualify(x.space,this.machine)===this.space&&x.space!==x.task);
       if(child)root.child(button('task-detach','Move into a new task',cx=>this.mutate(['detach','--space',child.space],cx,()=>closeOverlay(this.p.overlay)),disabled));
       root.child(button('task-new-toggle',this.showNew?'Cancel new worktree':'Create a new worktree…',cx=>{

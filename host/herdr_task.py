@@ -324,6 +324,9 @@ class Registry:
         old = self.data['checkouts'].get(folder) or next((r for r in self.data['checkouts'].values() if gitdir and r.get('gitdir')==gitdir),None)
         if old:
             phase = old.get('launch', {}).get('phase')
+            if phase not in (None, 'ready') and creation_record(old):
+                raise TaskError('Worktree creation is unfinished; use Resume worktree setup or resume-worktree',
+                                space=old['space'], folder=old['folder'])
             if phase == 'creating-root':
                 owner = self.task(old['task'])
                 raise TaskError('Checkout has an unfinished task root; retry create with the original --request-id',
@@ -757,6 +760,135 @@ def repository_default_ref(task):
         return command(['git', '-C', main['folder'], 'rev-parse', 'HEAD']).strip()
 
 
+def worktree_paths(repo):
+    raw = command(['git', '--git-dir', repo, 'worktree', 'list', '--porcelain', '-z'])
+    return {Path(entry[9:]).resolve() for entry in raw.split('\0') if entry.startswith('worktree ')}
+
+
+def creation_record(row):
+    return bool(row.get('creation') or row.get('start_point_commit')
+                or (row.get('launch') or {}).get('phase') in ('creating-checkout', 'checkout-created'))
+
+
+def new_worktree(store, args):
+    task = store.task(args.task)
+    if not task.get('repo') or checkout(task['folder'])['repo'] != task['repo']:
+        raise TaskError('The task no longer points to its saved Git repository')
+    folder = Path(args.folder).expanduser().resolve()
+    branch = args.branch
+    row = request_record(store, args.request_id)
+    if row:
+        creation = row.get('creation')
+        if (not creation_record(row) or row['folder'] != str(folder) or row.get('task') != args.task
+                or (creation and (creation['branch'], creation['start_ref']) != (branch, args.start_point))):
+            raise TaskError('Request ID was already used with another operation')
+        return resume_worktree(store, row['space'], branch)
+
+    if folder.exists() or Path(args.folder).expanduser().is_symlink() or branch.startswith('-'):
+        raise TaskError('Use a new folder and a valid new branch name')
+    command(['git', '-C', task['folder'], 'check-ref-format', '--branch', branch])
+    if branch_commit(task, branch):
+        raise TaskError('Branch already exists; choose a new branch or attach its existing worktree')
+    if any(folder.is_relative_to(path) for path in worktree_paths(task['repo'])):
+        raise TaskError('Create a worktree outside existing checkout directories')
+    store.check_free(str(folder))
+    ref = args.start_point or repository_default_ref(task)
+    start = command(['git', '-C', task['folder'], 'rev-parse', '--verify', '--end-of-options', ref + '^{commit}']).strip()
+    row = {'folder': str(folder), 'repo': task['repo'], 'main': False, 'task': args.task,
+           'space': 'sp-task-' + uuid.uuid4().hex, 'request_id': args.request_id or uuid.uuid4().hex,
+           'creation': {'branch': branch, 'start': start, 'start_ref': args.start_point},
+           'launch': {'phase': 'creating-checkout', 'at': int(time.time())}}
+    store.data['checkouts'][str(folder)] = row
+    store.save()
+    return resume_worktree(store, row['space'])
+
+
+def branch_commit(task, branch):
+    ref = 'refs/heads/' + branch
+    rows = command(['git', '-C', task['folder'], 'for-each-ref', '--format=%(refname) %(objectname)', ref])
+    return next((oid for name, oid in (row.split(' ', 1) for row in rows.splitlines()) if name == ref), None)
+
+
+def complete_git_checkout(store, row, task, expected_branch):
+    folder = Path(row['folder'])
+    creation = row.get('creation')
+    branch = creation['branch'] if creation else expected_branch
+    start = creation['start'] if creation else None
+    error = None
+    paths = worktree_paths(task['repo'])
+    if not folder.exists() and not folder.is_symlink() and not any(folder.is_relative_to(path) for path in paths):
+        if not creation:
+            raise TaskError('This older request did not save its branch or starting commit. Create a different worktree.')
+        existing = branch_commit(task, branch)
+        if existing and existing != start:
+            raise TaskError('The reserved branch changed after creation started. Choose another worktree or inspect it.')
+        git_args = [str(folder), branch] if existing else ['-b', branch, str(folder), start]
+        try:
+            command(['git', '-C', task['folder'], 'worktree', 'add', *git_args])
+        except TaskError as exc:
+            error = exc
+        paths = worktree_paths(task['repo'])
+    try:
+        actual = checkout(folder)
+        if (folder not in paths or actual['folder'] != str(folder) or actual['main'] or actual['repo'] != row['repo']
+                or (row.get('gitdir') and actual['gitdir'] != row['gitdir'])):
+            raise TaskError('Git did not register this exact linked checkout')
+        checked_branch = close_git(actual, ['symbolic-ref', '--short', 'HEAD']).strip()
+        if branch and checked_branch != branch:
+            raise TaskError('The checkout is on a different branch')
+        if start and close_git(actual, ['rev-parse', 'HEAD']).strip() != start:
+            raise TaskError('The checkout HEAD differs from the saved starting commit')
+        if (Path(actual['gitdir']) / 'index.lock').exists() or close_git(actual, ['status', '--porcelain=v1']):
+            raise TaskError('The checkout is incomplete or has local changes')
+    except (TaskError, OSError) as exc:
+        raise TaskError(f'Worktree creation is unfinished: {error or exc}. Resume it from Add a worktree, or use a different path.') from exc
+    row.update(actual)
+    if start:
+        row['start_point_commit'] = start
+    row['launch']['phase'] = 'checkout-created'
+    store.save()
+
+
+def resume_worktree(store, space, expected_branch=None):
+    row = store.assignment(space)
+    if not row or not creation_record(row) or row.get('close_action') or row.get('detach_to'):
+        raise TaskError('No matching worktree creation to resume')
+    task = store.task(row['task'])
+    if task['repo'] != row['repo'] or checkout(task['folder'])['repo'] != row['repo']:
+        raise TaskError('The task no longer points to the saved worktree repository')
+    phase = row['launch']['phase']
+    if phase == 'ready':
+        return dict(row)
+    if phase == 'creating-checkout':
+        complete_git_checkout(store, row, task, expected_branch)
+        phase = 'checkout-created'
+    if phase not in ('checkout-created', 'pending', 'unknown', 'not-found'):
+        raise TaskError('Unexpected worktree creation state')
+
+    folder = row['folder']
+    try:
+        if not matches_checkout(folder, row):
+            raise TaskError('The saved linked checkout identity changed')
+        existing = store.native(row['repo'])
+        assert_available(row, existing, space)
+        _, document = read_app_layout()
+        native = {'id': space, 'folder': folder, 'name': Path(folder).name}
+        if not has_task_root(document['spaces'], native):
+            if phase == 'checkout-created' and not any(r['space'] == space for r in existing):
+                address = start_shell(store, space, folder, native['name'], row)
+                return {**row, 'terminal': address}
+            # A launch reply may have been lost. Publish the same Space without launching a second shell.
+            for _, terminal in live_space_details(space):
+                if not matches_checkout(terminal.get('cwd'), row):
+                    raise TaskError('A live terminal uses the saved Space ID in a different checkout')
+            materialize_root(native, row, 'Retry Resume worktree setup')
+        row['launch']['phase'] = 'ready'
+        store.save()
+        return dict(row)
+    except (TaskError, OSError) as exc:
+        raise TaskError(str(exc), space=space, folder=folder, request_id=row.get('request_id')) from exc
+
+
 def close_git(claim, args):
     return command(['git', '--no-optional-locks', '-C', claim['folder'], '-c', 'core.fsmonitor=false', *args])
 
@@ -877,6 +1009,8 @@ def main(argv=None):
     p = sub.add_parser('new-worktree', help='Create a new Git worktree and attach it; does not fetch/reset')
     p.add_argument('--task', required=True); p.add_argument('--folder', required=True); p.add_argument('--branch', required=True)
     p.add_argument('--start-point'); p.add_argument('--request-id')
+    p = sub.add_parser('resume-worktree', help='Finish a saved creation on the original checkout and Space')
+    p.add_argument('--space', required=True)
     p = sub.add_parser('reconcile', help='Resolve a saved launch intent without starting another process')
     p.add_argument('--space', required=True)
     p = sub.add_parser('release-checkout', help='Explicitly forget a missing/closed child assignment after checking native identity')
@@ -928,7 +1062,11 @@ def main(argv=None):
                     raise TaskError('Existing native Space does not match this checkout')
                 assert_available(c, current, sid)
                 result = dict(row)
-            elif args.verb in ['attach', 'new-worktree']:
+            elif args.verb == 'new-worktree':
+                result = new_worktree(s, args)
+            elif args.verb == 'resume-worktree':
+                result = resume_worktree(s, args.space)
+            elif args.verb == 'attach':
                 if getattr(args, 'empty', False):
                     if args.space:
                         raise TaskError('Use --empty for a new native child, or --space to adopt an existing one')
@@ -937,38 +1075,11 @@ def main(argv=None):
                 task = s.task(args.task)
                 if not task.get('repo'):
                     raise TaskError('This task has a directory instead of a Git repository')
-                intended = checkout(args.folder)['folder'] if args.verb=='attach' else str(Path(args.folder).expanduser().resolve())
+                intended = checkout(args.folder)['folder']
                 repeated = request_result(s, args.request_id, intended, args.task)
                 if repeated:
                     print(json.dumps(repeated));return 0
                 sid = getattr(args, 'space', None) or 'sp-task-' + uuid.uuid4().hex
-                if args.verb == 'new-worktree':
-                    if checkout(task['folder'])['repo'] != task['repo']:
-                        raise TaskError('The task folder no longer belongs to its saved Git repository')
-                    if Path(args.folder).expanduser().exists() or args.branch.startswith('-'):
-                        raise TaskError('Use a new folder and a valid new branch name')
-                    command(['git', '-C', task['folder'], 'check-ref-format', '--branch', args.branch])
-                    if command(['git','-C',task['folder'],'branch','--list','--format=%(refname)',args.branch]).strip():
-                        raise TaskError('Branch already exists; choose a new branch or attach its existing worktree')
-                    start=command(['git', '-C', task['folder'], 'rev-parse', '--verify', '--end-of-options', (args.start_point or repository_default_ref(task)) + '^{commit}']).strip()
-                    existing=command(['git','-C',task['folder'],'worktree','list','--porcelain','-z'])
-                    if any(Path(intended).is_relative_to(Path(x[9:]).resolve()) for x in existing.split('\0') if x.startswith('worktree ')):
-                        raise TaskError('Create a worktree outside existing checkout directories')
-                    s.check_free(intended)
-                    # Reserve before Git or hc mutations; retain intent on any failure.
-                    pending={'folder':intended,'repo':task['repo'],'main':False,'task':args.task,'space':sid,
-                        'request_id':args.request_id or uuid.uuid4().hex,'launch':{'phase':'creating-checkout','at':int(time.time())}}
-                    s.data['checkouts'][intended]=pending;s.save()
-                    try:
-                        command(['git', '-C', task['folder'], 'worktree', 'add', '-b', args.branch, intended, start])
-                    except TaskError as e:
-                        if e.context.get('definite') and not Path(intended).exists():
-                            listed=command(['git','-C',task['folder'],'worktree','list','--porcelain','-z'])
-                            if ('worktree '+intended+'\0') not in listed:
-                                del s.data['checkouts'][intended];s.save()
-                        raise TaskError(str(e), space=sid,folder=intended) from e
-                    pending.update(checkout(intended));pending['start_point_commit']=start
-                    pending['launch']['phase']='checkout-created';s.save()
                 c = checkout(args.folder)
                 current = s.native(c['repo'])
                 existing_sid = getattr(args, 'space', None)

@@ -36,7 +36,8 @@ class PRChecksTests(TestCase):
     def test_screens_follow_changed_surfaces(self):
         self.assertEqual(scenarios_for(['README.md', 'tests/test_close.py']), [])
         self.assertEqual(scenarios_for(['mods/linked-changes-refined/main.js']), ['changes'])
-        self.assertEqual(scenarios_for(['host/herdr_task.py']), ['workspace', 'new-task', 'worktree-settings'])
+        self.assertEqual(scenarios_for(['host/herdr_task.py']),
+                         ['workspace', 'new-task', 'worktree-settings', 'worktree-resume', 'worktree-return'])
         self.assertIn('launcher', scenarios_for(['layouts/task-spaces-refined.json']))
 
     def test_fork_artifact_resolves_only_to_the_current_pr(self):

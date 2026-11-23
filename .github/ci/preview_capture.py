@@ -15,7 +15,8 @@ LAYOUT = 'task-spaces-refined'
 PANELS = {'files', 'changes', 'merge-requests', 'automations'}
 DIALOGS = {'new-task': 'task-spaces-refined', 'launcher': 'agent-launcher-refined',
            'recent': 'session-recent-refined', 'settings': 'better-config-refined',
-           'worktree-settings': 'worktree-close-refined'}
+           'worktree-settings': 'worktree-close-refined', 'worktree-resume': 'task-spaces-refined',
+           'worktree-return': 'worktree-close-refined'}
 FROZEN_SERVICES = {'task-spaces-service', 'merge-requests-service'}
 CONTROL = """
 import { View, div } from 'gpui-kit';
@@ -27,7 +28,12 @@ export default class Preview extends View {
       const step = JSON.parse(await readTextFile(appHome() + '/mods/preview-control/step.json'));
       for (const [key, value] of Object.entries(step.shared ?? {})) setShared(key, value);
       closeOverlay(id);
-      if (step.overlay) openOverlay(step.overlay);
+      if (step.overlay) {
+        const size = window.viewport_size();
+        if (step.overlay.props?.mode === 'progress')
+          step.overlay.at = { x: size.width - 402, y: size.height - 178 };
+        openOverlay(step.overlay);
+      }
     });
   }
   render() { return div().size(0); }
@@ -140,6 +146,18 @@ def capture(source, output, names, scratch, session):
                     f"ls) printf '%s\\n' '{json.dumps(automation_rows)}';;\n"
                     "history) printf '%s\\n' '[]';;\n*) exit 1;;\nesac\n")
     stub.chmod(0o755)
+    task_files = home / '.local/bin'
+    task_stub = task_files / 'herdr-task'
+    task_stub.write_text("""#!/bin/sh
+case "$1" in
+snapshot) cat "$HOME/.local/bin/fixture-task-state.json" ;;
+inventory) cat "$HOME/.local/bin/fixture-task-inventory.json" ;;
+prepare-close-worktree) printf '{}\n' ;;
+finish-close-worktree) sleep 8; printf '{"waiting":true}\n' ;;
+*) exit 1 ;;
+esac
+""")
+    task_stub.chmod(0o755)
 
     def demo_argv(tool, state):
         program = 'claude-code' if tool == 'claude' else tool
@@ -187,6 +205,17 @@ def capture(source, output, names, scratch, session):
             tasks = {key: {'id': key, 'name': title, 'repo': str(repo / '.git'), 'folder': str(repo), 'main': True}
                      for key, title in ((main_space, 'Session recovery'), (second, 'Notebook search'))}
             claim = {'task': main_space, 'space': tree, 'folder': str(checkout), 'main': False, 'repo': str(repo / '.git')}
+            pending_folder = str(home / 'Projects/orbit5')
+            pending = {**claim, 'space': 'fixture-pending', 'folder': pending_folder,
+                       'launch': {'phase': 'creating-checkout'}}
+            # The Manage dialog reads inventory from the owning host. Supply an
+            # interrupted creation under a distinct path from the live fixture.
+            write_json(task_files / 'fixture-task-state.json', {
+                'version': 1, 'tasks': tasks, 'checkouts': {pending_folder: pending},
+            })
+            write_json(task_files / 'fixture-task-inventory.json', {
+                'checkouts': [{**pending, 'owner': pending, 'branch': 'orbit5-idle', 'spaces': [], 'available': False}],
+            })
             request_space = {'id': tree, 'name': 'orbit-recovery', 'machine': None}
             request = {'number': 42, 'id': 'preview-42', 'title': 'Keep the saved session ID',
                        'repository': 'demo/orbit', 'provider': 'github', 'state': 'OPEN',
@@ -202,7 +231,7 @@ def capture(source, output, names, scratch, session):
             time.sleep(1.3)
             action('layout.resize', id='sidebar', px=296)
             action('layout.resize', id='panel', px=364)
-            for name in names:
+            for name in sorted(names, key=lambda name: name == 'worktree-return'):
                 if name in PANELS:
                     action('layout.select', stack='panel-body', child=name)
                     action('layout.show', id='panel')
@@ -215,6 +244,19 @@ def capture(source, output, names, scratch, session):
                                 if name == 'launcher' else
                                 {'mode': 'settings', 'folder': str(repo), 'repo': str(repo / '.git')})
                         fixture_control(overlay={'mod': mod, 'kind': 'dialog', 'width': 500, 'height': 370, 'props': args})
+                    elif name == 'worktree-resume':
+                        fixture_control(overlay={'mod': mod, 'kind': 'dialog', 'width': 530, 'height': 400,
+                                                 'props': {'space': main_space, 'action': 'manage'}})
+                    elif name == 'worktree-return':
+                        args = {'space': tree, 'folder': str(checkout), 'repo': str(repo / '.git')}
+                        if 'continueClose(cx)' in (source / f'mods/{mod}/main.js').read_text():
+                            args.update(mode='progress', choice='return', request='preview-return',
+                                        branch='orbit-recovery-idle', command='')
+                            fixture_control(overlay={'mod': mod, 'kind': 'window', 'frame': 'none', 'width': 390,
+                                                     'props': args})
+                        else:
+                            fixture_control(overlay={'mod': mod, 'kind': 'dialog', 'width': 530, 'height': 340,
+                                                     'props': args})
                     else:
                         action('mod.open', name=mod)
                     wait_for(lambda: len(status()['overlays']) == 1 and mod in status()['overlays'])
@@ -223,7 +265,7 @@ def capture(source, output, names, scratch, session):
                 if errors:
                     raise RuntimeError(f'{name}: {errors}')
                 call(herdr, 'shot', str(output / f'{name}.png'))
-                if name in DIALOGS:
+                if name in DIALOGS and name != 'worktree-return':
                     close_overlays()
                 print(f'Captured {name}: {output / f"{name}.png"}', flush=True)
     except Exception:
@@ -254,5 +296,5 @@ if __name__ == '__main__':
         fixture = Path(temp) / 'fixture'
         for side, source in (('before', args.before), ('after', args.after)):
             capture(source.resolve(), (args.output / side).resolve(), args.screens, fixture,
-                    f'{Path(temp).name}-{side}')
+                    f'{Path(temp).name[-8:]}-{side[0]}')
             shutil.rmtree(fixture)

@@ -58,7 +58,11 @@ Open the repository header menu and choose **Worktree close settings**. The poli
 
 Close the assigned worktree from its context menu or close its last tab or pane using this layout's controls. The same confirmation offers **Keep worktree**, **Return to pool**, and **Delete worktree**. Keep is selected initially. Return and Delete check cleanliness before closing and again after all Herdr users of that checkout have exited. Delete uses `git worktree remove` and keeps the branch. Existing terminal exits that leave a shell open do not count as closing its tab.
 
+After confirmation, the return or delete runs from a progress card at the bottom right. It shows the worktree being processed and offers retry or cancellation if the operation stops.
+
 A failed return or delete retains the assignment for retry or cancellation. For recovery after closing the dialog, inspect `herdr-task snapshot` on the owning host and use the saved `close_action.id` with `finish-close-worktree` or `cancel-close-worktree`. A custom command runs with the user's permissions on the chosen host. Use a command you trust. Treat a timeout or partial custom command failure as uncertain and inspect the branch before retrying.
+
+If creating a worktree is interrupted, open **Add a worktree → Resume setup** in its task. The host verifies the saved checkout before reusing its Space. You can also run `herdr-task resume-worktree --space SPACE` on the owning host. An interrupted folder with local changes stays reserved for inspection. A different worktree path can still be used.
 
 ## Agent coordination and remote hosts
 
